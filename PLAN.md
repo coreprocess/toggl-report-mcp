@@ -49,6 +49,35 @@ the client must honor this.
 Configuration is validated once at startup (fail fast with an actionable message on
 stderr — never stdout, which is reserved for the MCP protocol).
 
+## Workspace resolution
+
+Workspace-scoped export tools (detailed, summary, weekly) resolve the workspace in
+this order:
+
+1. **`workspace_id` tool argument** — always wins if provided.
+2. **`TOGGL_WORKSPACE_ID` env var** — used when the tool call omits the argument.
+3. **Auto-detection** — if neither is set, the server calls the Toggl main API
+   (`GET /api/v9/me/workspaces`, same host and auth as the Reports API) to list the
+   workspaces accessible to the token:
+   - **Exactly one workspace** → use it as the obvious default.
+   - **Multiple workspaces** → return a tool error that enumerates all accessible
+     workspaces as `id` + `name` pairs and instructs the model to retry with an
+     explicit `workspace_id`. Example error text:
+     `Multiple Toggl workspaces are accessible and no workspace_id was provided. Pass one of: 123456 "Acme Inc", 789012 "Personal".`
+   - **Zero workspaces** → tool error explaining the token has no workspace access.
+
+Implementation notes:
+
+- Auto-detection lives in `toggl-client.ts` as `resolveWorkspaceId()` shared by all
+  workspace-scoped tools.
+- The workspace list is fetched lazily (first tool call that needs it, not at
+  startup) and cached in memory for the process lifetime, so the multi-workspace
+  error and subsequent retries don't burn extra requests against Toggl's rate limit.
+- The tool descriptions document this behavior so the model knows `workspace_id` is
+  optional and what the error means.
+- Unit tests cover all four branches (explicit arg, env default, single-workspace
+  auto-pick, multi-workspace error listing).
+
 ## Tool surface
 
 One tool per report type, each taking a `format: "pdf" | "csv"` parameter. Separate
@@ -57,7 +86,8 @@ schema small and accurate, which helps LLM tool selection.
 
 1. **`export_detailed_report`**
    - Inputs: `format`, `start_date`, `end_date` (ISO `YYYY-MM-DD`), optional
-     `workspace_id` (falls back to env default), optional filters (`project_ids`,
+     `workspace_id` (resolved per "Workspace resolution" above when omitted),
+     optional filters (`project_ids`,
      `client_ids`, `tag_ids`, `user_ids`, `billable`, `description`, `grouped`,
      `order_by`/`order_dir`, `hide_amounts`, rounding options), optional `filename`.
 2. **`export_summary_report`**
