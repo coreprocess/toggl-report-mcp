@@ -1,0 +1,66 @@
+{
+  "name": "toggl-report-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for creating PDF/CSV report exports via the Toggl Reports API v3",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "toggl-report-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "postbuild": "chmod +x dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src/ tests/",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "modelcontextprotocol",
+    "toggl",
+    "toggl-track",
+    "reports",
+    "export",
+    "pdf",
+    "csv",
+    "time-tracking"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coreprocess/toggl-report-mcp.git"
+  },
+  "homepage": "https://github.com/coreprocess/toggl-report-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/coreprocess/toggl-report-mcp/issues"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^17.4.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.1",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
+  }
+}
