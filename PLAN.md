@@ -111,23 +111,41 @@ features; a Free-plan user's first `format: "csv"` call may 402/403. Tool
 descriptions and the README document this, and the feature-gating error message
 names the specific feature so the model can fall back to PDF.
 
-### Pagination risk (must verify during implementation)
+### Pagination (resolved by research; cheap guardrail retained)
 
-The detailed export request bodies document `page_size` (**default 50**) and
-`first_row_number`/`first_id` cursor fields. Whether the *file* endpoints honor
-pagination (i.e. whether a CSV silently truncates at 50 rows) cannot be resolved
-from the docs — the `X-Next-*` cursor response headers are documented only on the
-JSON search endpoint. Since silent truncation of an invoice CSV is the worst
-possible failure mode, this is a first-class implementation task:
+The detailed *export* request bodies document `page_size` (**default 50**) and
+`first_row_number`/`first_id` cursor fields, which raised the concern that a CSV
+export might silently truncate at 50 rows. Online research resolved this with high
+confidence: **file exports return the complete report; pagination applies only to
+the JSON `search/time_entries` endpoint.** Evidence:
 
-- Always send an explicit, large `page_size` on detailed exports.
-- Verify against a real account whether file exports truncate; if they do, loop on
-  `first_row_number` and concatenate CSV pages (dropping repeated header rows), and
-  for PDF return `truncated: true` + `next_row_number` in the structured result
-  rather than attempting PDF merging.
-- Assert expected row counts in the integration tests, and include a `row_count`
-  (CSV) in the tool result so empty or suspiciously small exports are visible
-  ("no time entries matched" instead of a silently empty file).
+- Toggl's docs and community posts describe the `X-Next-ID`/`X-Next-Row-Number`
+  cursor mechanism exclusively for the JSON detailed endpoint; the export endpoints
+  document no pagination response headers.
+- Every real-world client found using `search/time_entries.csv` (e.g.
+  `compilerla/compiler-admin`, an agency's production monthly-reporting tool;
+  `shoekstra/go-toggl`; others) sends a single request with only date-range/filter
+  fields and consumes the whole body. compiler-admin even scales its HTTP timeout
+  with the date-range size (~5s per month, tested for 6-month ranges), which only
+  makes sense if one response carries the entire range. No GitHub issue or forum
+  thread reporting 50-row truncation of file exports exists.
+- The pagination fields in the export body are a docs-generation artifact: Toggl's
+  reference is generated from the same Go request struct as the JSON endpoint
+  (fields like `enrich_response`, equally meaningless for a CSV file, appear there
+  too), and the weekly/summary export bodies have no pagination fields at all.
+- Toggl's knowledge base states the UI's CSV export (same API family) exports all
+  matching entries.
+
+Residual guardrails, since silent truncation would be the worst possible failure
+mode and the evidence is empirical rather than an explicit doc statement:
+
+- The credential-gated live contract test asserts a >50-row CSV export comes back
+  complete.
+- The tool result includes `row_count` for CSV exports, so an unexpectedly small or
+  empty file is visible to the model ("no time entries matched" instead of a
+  silently empty file).
+- Do not send `page_size` or cursor fields in export bodies (match what working
+  clients do).
 
 ## Configuration (environment variables)
 
@@ -406,9 +424,8 @@ Packaging details that break `npx` if forgotten:
    5xx), response validation.
 3. File writer: sanitization, realpath containment, atomic `wx` + temp-rename
    writes, permissions, partial-file cleanup.
-4. `toggl_export_detailed_report` end-to-end for both formats, including the
-   **pagination verification task** (live check; loop-and-concatenate or
-   `truncated` flag as findings dictate) and `row_count` reporting.
+4. `toggl_export_detailed_report` end-to-end for both formats, including
+   `row_count` reporting and the live >50-row completeness assertion.
 5. Remaining tools: summary, weekly, `toggl_list_report_exports`; workspace
    resolution with TTL cache.
 6. Tests (unit + stdio smoke + credential-gated live), CI workflow, README
@@ -435,13 +452,13 @@ Packaging details that break `npx` if forgotten:
    restrictive permissions.
 8. **dotenv loaded quiet** + stdout-purity test to protect the stdio protocol.
 9. **Client-side request serialization** added on top of reactive 429 retries.
-10. **Pagination truncation** treated as an unresolved API question with a
-    mandatory empirical verification step and row-count reporting as a guardrail.
+10. **Pagination truncation ruled out by research** (docs-generation artifact;
+    every production client fetches whole files in one request; no truncation
+    reports exist anywhere). Row-count reporting and a live >50-row test assertion
+    retained as cheap guardrails.
 
 ## Remaining open questions
 
-1. **Pagination behavior of file exports** — resolved only by the live check in
-   implementation step 4; both outcomes have a planned code path.
-2. **Single-day and maximum date ranges** — Toggl docs suggest `end_date` must be
+1. **Single-day and maximum date ranges** — Toggl docs suggest `end_date` must be
    greater than `start_date` and hint at a maximum supported period; verified live,
    then encoded in zod validation and error messages.
