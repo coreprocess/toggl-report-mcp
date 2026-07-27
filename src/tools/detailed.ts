@@ -21,7 +21,8 @@ export function registerDetailedExportTool(server: McpServer, ctx: ToolContext):
       title: 'Export detailed Toggl report (PDF/CSV file)',
       description:
         `${FILE_TOOL_DISCLAIMER} Exports the Toggl detailed report (one row per time entry) ` +
-        'for a workspace and date range via the Toggl Reports API v3.',
+        'for a workspace and date range via the Toggl Reports API v3. ' +
+        'Note: CSV export of the detailed report requires a paid Toggl plan; PDF works on all plans.',
       inputSchema: {
         ...commonExportInputs,
         start_date: dateSchema.describe('Start of the reporting period. ISO date, YYYY-MM-DD.'),

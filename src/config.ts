@@ -11,6 +11,8 @@ export interface Config {
   apiBaseUrl: string;
   /** Per-attempt HTTP timeout in milliseconds. */
   requestTimeoutMs: number;
+  /** Hard cap on downloaded report size in bytes. */
+  maxExportBytes: number;
 }
 
 /** Fatal configuration problem: the server refuses to start. */
@@ -23,6 +25,7 @@ export class ConfigError extends Error {
 
 export const DEFAULT_API_BASE_URL = 'https://api.track.toggl.com';
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+export const DEFAULT_MAX_EXPORT_MB = 100;
 
 /** Same precedence as verygoodplugins/mcp-toggl: TOGGL_API_KEY preferred. */
 const TOKEN_VARS = ['TOGGL_API_KEY', 'TOGGL_API_TOKEN', 'TOGGL_TOKEN'] as const;
@@ -48,6 +51,12 @@ export function validateBaseUrl(raw: string): string {
     throw new ConfigError(
       'TOGGL_API_BASE_URL must use HTTPS; plain HTTP is only allowed for loopback addresses ' +
         '(the Basic-auth header must never travel over cleartext to a remote host).',
+    );
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new ConfigError(
+      'TOGGL_API_BASE_URL must be a plain origin (optionally with a path): ' +
+        'credentials, query strings, and fragments are not allowed.',
     );
   }
   return url.toString().replace(/\/+$/, '');
@@ -84,8 +93,15 @@ export function prepareExportDir(raw: string | undefined): string {
       `TOGGL_EXPORT_DIR (${dir}) could not be resolved: ${(err as Error).message}`,
     );
   }
-  const stat = fs.statSync(real);
-  if (!stat.isDirectory()) {
+  let isDirectory: boolean;
+  try {
+    isDirectory = fs.statSync(real).isDirectory();
+  } catch (err) {
+    throw new ConfigError(
+      `TOGGL_EXPORT_DIR (${dir}) could not be inspected: ${(err as Error).message}`,
+    );
+  }
+  if (!isDirectory) {
     throw new ConfigError(`TOGGL_EXPORT_DIR (${dir}) is not a directory.`);
   }
   try {
@@ -96,26 +112,28 @@ export function prepareExportDir(raw: string | undefined): string {
   return real;
 }
 
+function parsePositiveInteger(raw: string, name: string): number {
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (!/^\d+$/.test(trimmed) || value <= 0 || !Number.isSafeInteger(value)) {
+    throw new ConfigError(`${name} must be a positive integer, got ${JSON.stringify(raw)}.`);
+  }
+  return value;
+}
+
 function parseDefaultWorkspaceId(raw: string | undefined): number | undefined {
   if (raw === undefined || raw.trim() === '') return undefined;
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed) || Number(trimmed) <= 0) {
-    throw new ConfigError(
-      `TOGGL_DEFAULT_WORKSPACE_ID must be a positive integer, got ${JSON.stringify(raw)}.`,
-    );
-  }
-  return Number(trimmed);
+  return parsePositiveInteger(raw, 'TOGGL_DEFAULT_WORKSPACE_ID');
 }
 
 function parseTimeout(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === '') return DEFAULT_REQUEST_TIMEOUT_MS;
-  const value = Number(raw.trim());
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new ConfigError(
-      `TOGGL_REQUEST_TIMEOUT_MS must be a positive integer (milliseconds), got ${JSON.stringify(raw)}.`,
-    );
-  }
-  return value;
+  return parsePositiveInteger(raw, 'TOGGL_REQUEST_TIMEOUT_MS');
+}
+
+function parseMaxExportBytes(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_EXPORT_MB * 1024 * 1024;
+  return parsePositiveInteger(raw, 'TOGGL_MAX_EXPORT_MB') * 1024 * 1024;
 }
 
 /**
@@ -132,5 +150,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     defaultWorkspaceId: parseDefaultWorkspaceId(env.TOGGL_DEFAULT_WORKSPACE_ID),
     apiBaseUrl: validateBaseUrl(env.TOGGL_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL),
     requestTimeoutMs: parseTimeout(env.TOGGL_REQUEST_TIMEOUT_MS),
+    maxExportBytes: parseMaxExportBytes(env.TOGGL_MAX_EXPORT_MB),
   };
 }

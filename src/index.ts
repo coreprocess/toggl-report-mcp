@@ -5,8 +5,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { ConfigError, loadConfig } from './config.js';
+import { cleanStaleTempFiles } from './exports.js';
 import { TogglClient } from './toggl-client.js';
-import type { ToolContext } from './tools/common.js';
+import { inflightOperations, type ToolContext } from './tools/common.js';
 import { registerDetailedExportTool } from './tools/detailed.js';
 import { registerListExportsTool } from './tools/list-exports.js';
 import { registerSummaryExportTool } from './tools/summary.js';
@@ -56,6 +57,10 @@ async function main(): Promise<void> {
   registerWeeklyExportTool(server, ctx);
   registerListExportsTool(server, ctx);
 
+  // Best-effort removal of temp files a crashed previous run left behind
+  // (only files old enough to not belong to a live concurrent instance).
+  void cleanStaleTempFiles(config.exportDir);
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(`ready (stdio transport); exports are written to ${config.exportDir}`);
@@ -67,6 +72,15 @@ async function main(): Promise<void> {
     log(`received ${signal}, shutting down`);
     try {
       await server.close();
+      // Give in-flight exports a short grace period to finish or clean up
+      // their temp files before the process exits.
+      if (inflightOperations.size > 0) {
+        log(`waiting for ${inflightOperations.size} in-flight export(s)`);
+        await Promise.race([
+          Promise.allSettled([...inflightOperations]),
+          new Promise((resolve) => setTimeout(resolve, 5000)),
+        ]);
+      }
     } finally {
       process.exit(0);
     }

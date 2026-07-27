@@ -13,6 +13,8 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 
 const CSV_BODY = 'User,Project,Duration\nalice,acme,1:00\nbob,acme,2:00\n';
 const PDF_BODY = '%PDF-1.7\nfake pdf payload\n%%EOF\n';
+/** Requests against this workspace ID get a 402 + quota headers from the stub. */
+const QUOTA_WORKSPACE_ID = 40200;
 
 interface Stub {
   server: http.Server;
@@ -40,6 +42,13 @@ function startStub(): Promise<Stub> {
         req.url ?? '',
       );
       if (req.method === 'POST' && exportMatch) {
+        if (Number(exportMatch[1]) === QUOTA_WORKSPACE_ID) {
+          res.statusCode = 402;
+          res.setHeader('x-toggl-quota-remaining', '0');
+          res.setHeader('x-toggl-quota-resets-in', '900');
+          res.end();
+          return;
+        }
         if (exportMatch[3] === 'pdf') {
           res.setHeader('content-type', 'application/pdf');
           res.end(PDF_BODY);
@@ -67,10 +76,15 @@ function startStub(): Promise<Stub> {
   });
 }
 
+/**
+ * Hermetic child environment: inherits the process env for PATH/HOME/etc.,
+ * but strips all TOGGL_* variables first so a developer's local settings
+ * (or a .env file) cannot silently change test behavior.
+ */
 function serverEnv(stub: Stub, exportDir: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) env[key] = value;
+    if (value !== undefined && !key.startsWith('TOGGL_')) env[key] = value;
   }
   env.TOGGL_API_KEY = 'smoke-test-token';
   env.TOGGL_EXPORT_DIR = exportDir;
@@ -78,9 +92,17 @@ function serverEnv(stub: Stub, exportDir: string): Record<string, string> {
   return env;
 }
 
-const serverArgs = ['--import', 'tsx', path.join(projectRoot, 'src', 'index.ts')];
+// The smoke tests run the BUILT server (dist/index.js, produced by the
+// pretest build) so packaging problems — a missing shebang, broken NodeNext
+// import extensions — fail the suite, not the first real user.
+const serverArgs = [path.join(projectRoot, 'dist', 'index.js')];
 
-describe('stdio smoke test (real server against a local HTTP stub)', () => {
+function parseErrorPayload(result: unknown): Record<string, unknown> {
+  const content = (result as { content: { text: string }[] }).content;
+  return JSON.parse(content[0]!.text);
+}
+
+describe('stdio smoke test (built server against a local HTTP stub)', () => {
   let stub: Stub;
   let exportDir: string;
   let client: Client;
@@ -131,8 +153,9 @@ describe('stdio smoke test (real server against a local HTTP stub)', () => {
     expect(structured.workspace_id).toBe(123);
     expect(structured.row_count).toBe(2);
     expect(fs.readFileSync(structured.file_path, 'utf8')).toBe(CSV_BODY);
-    // Content-Disposition filename from the stub is honored.
-    expect(path.basename(structured.file_path)).toMatch(/^toggl_stub_export/);
+    // Content-Disposition filename from the stub is honored, with a
+    // timestamp appended to keep re-exports distinguishable.
+    expect(path.basename(structured.file_path)).toMatch(/^toggl_stub_export-\d{8}-\d{6}\.csv$/);
 
     const exportRequest = stub.requests.find((r) => r.url.includes('search/time_entries.csv'));
     expect(exportRequest).toBeDefined();
@@ -167,9 +190,27 @@ describe('stdio smoke test (real server against a local HTTP stub)', () => {
       arguments: { format: 'csv', start_date: '2026-07-31', end_date: '2026-07-01' },
     });
     expect(result.isError).toBe(true);
-    const payload = JSON.parse((result.content as { text: string }[])[0]!.text);
-    expect(payload.error.code).toBe('INVALID_REQUEST');
+    const payload = parseErrorPayload(result);
+    expect(payload.error).toBe(true);
+    expect(payload.code).toBe('INVALID_REQUEST');
     expect(stub.requests.length).toBe(before);
+  });
+
+  it('maps a 402 quota response to TOGGL_QUOTA_EXCEEDED over the wire', async () => {
+    const result = await client.callTool({
+      name: 'toggl_export_detailed_report',
+      arguments: {
+        format: 'csv',
+        start_date: '2026-07-01',
+        end_date: '2026-07-31',
+        workspace_id: QUOTA_WORKSPACE_ID,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const payload = parseErrorPayload(result);
+    expect(payload.error).toBe(true);
+    expect(payload.code).toBe('TOGGL_QUOTA_EXCEEDED');
+    expect(payload.resets_in_seconds).toBe(900);
   });
 
   it('lists the exported files, newest first', async () => {
@@ -204,9 +245,10 @@ describe('workspace resolution over stdio', () => {
         arguments: { format: 'csv', start_date: '2026-07-01', end_date: '2026-07-31' },
       });
       expect(result.isError).toBe(true);
-      const payload = JSON.parse((result.content as { text: string }[])[0]!.text);
-      expect(payload.error.code).toBe('WORKSPACE_REQUIRED');
-      expect(payload.error.available_workspaces).toEqual([
+      const payload = parseErrorPayload(result);
+      expect(payload.error).toBe(true);
+      expect(payload.code).toBe('WORKSPACE_REQUIRED');
+      expect(payload.available_workspaces).toEqual([
         { id: 123, name: 'Test Workspace' },
         { id: 456, name: 'Second Workspace' },
       ]);

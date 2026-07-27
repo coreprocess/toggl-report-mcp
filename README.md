@@ -66,6 +66,7 @@ Which reports have I already exported?
 | `TOGGL_DEFAULT_WORKSPACE_ID` | No | – | Used when a tool call omits `workspace_id`. |
 | `TOGGL_API_BASE_URL` | No | `https://api.track.toggl.com` | Override for testing. Must be HTTPS unless pointing at a loopback address. |
 | `TOGGL_REQUEST_TIMEOUT_MS` | No | `60000` | Per-attempt HTTP timeout. Large exports can be slow. |
+| `TOGGL_MAX_EXPORT_MB` | No | `100` | Hard cap on the size of a downloaded report. Oversized responses fail with `RESPONSE_TOO_LARGE` instead of exhausting memory. |
 
 A `.env` file in the working directory is loaded too (quietly — stdout is reserved
 for the MCP protocol). See `.env.example`.
@@ -101,6 +102,9 @@ The workspace list is cached in-process for one hour.
   mode `0600`, and partial files are cleaned up on failure.
 - **Empty results**: CSV results include `row_count`, so "no time entries matched"
   is visible instead of silently handing over an empty file.
+- **Error payloads**: tool errors set `isError` and carry a flat JSON payload in
+  the text content — `{ "error": true, "code": "...", "message": "...", ... }` —
+  the same shape mcp-toggl uses, so models recover from both servers identically.
 
 ### Where are the server logs?
 
@@ -129,9 +133,21 @@ npm run format
 npx @modelcontextprotocol/inspector node dist/index.js   # interactive testing
 ```
 
-The test suite includes a stdio smoke test that boots the real server against a
-local HTTP stub (via `TOGGL_API_BASE_URL`) and asserts stdout carries nothing but
-JSON-RPC.
+The test suite includes a stdio smoke test that boots the **built** server
+(`dist/index.js`) against a local HTTP stub (via `TOGGL_API_BASE_URL`) and asserts
+stdout carries nothing but JSON-RPC. `npm test` builds first.
+
+### Live contract test
+
+A credential-gated suite verifies real-API behavior that stubs cannot: that
+detailed CSV exports return the complete report (no 50-row pagination
+truncation) and that single-day date ranges are accepted. Run it once before
+publishing a release:
+
+```bash
+TOGGL_LIVE_TEST_TOKEN=your_api_token npm run test:live
+# optionally: TOGGL_LIVE_TEST_WORKSPACE_ID=123456
+```
 
 ## Roadmap
 

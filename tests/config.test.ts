@@ -58,6 +58,12 @@ describe('validateBaseUrl', () => {
   it('rejects invalid URLs', () => {
     expect(() => validateBaseUrl('not a url')).toThrow(ConfigError);
   });
+
+  it('rejects credentials, query strings, and fragments', () => {
+    expect(() => validateBaseUrl('https://user:pass@api.track.toggl.com')).toThrow(ConfigError);
+    expect(() => validateBaseUrl('https://api.track.toggl.com?x=1')).toThrow(ConfigError);
+    expect(() => validateBaseUrl('https://api.track.toggl.com#frag')).toThrow(ConfigError);
+  });
 });
 
 describe('prepareExportDir', () => {
@@ -104,18 +110,33 @@ describe('loadConfig', () => {
     expect(config.defaultWorkspaceId).toBeUndefined();
   });
 
-  it('rejects a non-numeric default workspace id', () => {
+  it('rejects a non-numeric or unsafe default workspace id', () => {
     expect(() =>
       loadConfig({ TOGGL_EXPORT_DIR: tmpDir(), TOGGL_DEFAULT_WORKSPACE_ID: 'abc' }),
     ).toThrow(ConfigError);
     expect(() =>
       loadConfig({ TOGGL_EXPORT_DIR: tmpDir(), TOGGL_DEFAULT_WORKSPACE_ID: '0' }),
     ).toThrow(ConfigError);
+    expect(() =>
+      loadConfig({ TOGGL_EXPORT_DIR: tmpDir(), TOGGL_DEFAULT_WORKSPACE_ID: '9007199254740993' }),
+    ).toThrow(ConfigError);
   });
 
-  it('rejects an invalid timeout', () => {
+  it('rejects invalid timeouts, including exponent notation', () => {
     expect(() =>
       loadConfig({ TOGGL_EXPORT_DIR: tmpDir(), TOGGL_REQUEST_TIMEOUT_MS: '-5' }),
     ).toThrow(ConfigError);
+    expect(() =>
+      loadConfig({ TOGGL_EXPORT_DIR: tmpDir(), TOGGL_REQUEST_TIMEOUT_MS: '1e3' }),
+    ).toThrow(ConfigError);
+  });
+
+  it('parses the export size cap', () => {
+    const config = loadConfig({ TOGGL_EXPORT_DIR: tmpDir(), TOGGL_MAX_EXPORT_MB: '5' });
+    expect(config.maxExportBytes).toBe(5 * 1024 * 1024);
+    expect(loadConfig({ TOGGL_EXPORT_DIR: tmpDir() }).maxExportBytes).toBe(100 * 1024 * 1024);
+    expect(() => loadConfig({ TOGGL_EXPORT_DIR: tmpDir(), TOGGL_MAX_EXPORT_MB: 'big' })).toThrow(
+      ConfigError,
+    );
   });
 });

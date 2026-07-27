@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
@@ -7,8 +8,15 @@ import { ToolError } from './errors.js';
 export type ExportFormat = 'pdf' | 'csv';
 
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-const MAX_BASENAME_LENGTH = 120;
+/** Byte budget (not UTF-16 units): common filesystems cap names at 255 bytes. */
+const MAX_BASENAME_BYTES = 120;
 const MAX_COLLISION_SUFFIX = 1000;
+const TEMP_FILE_PREFIX = '.toggl-report-tmp-';
+const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000;
+
+function invalidFilename(input: string, reason: string): ToolError {
+  return new ToolError('INVALID_FILENAME', `${reason}: ${JSON.stringify(input)}`);
+}
 
 /**
  * Sanitizes a caller-supplied filename to a safe basename with the correct
@@ -17,17 +25,19 @@ const MAX_COLLISION_SUFFIX = 1000;
  */
 export function sanitizeFilename(input: string, extension: ExportFormat): string {
   let name = input
-    // NUL + control characters, then path separators.
+    // NUL + control characters, path separators, then characters invalid on
+    // Windows/NTFS (":" would create an alternate data stream).
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/[/\\]/g, '')
+    .replace(/[<>:"|?*]/g, '')
     .trim()
     // Windows cannot represent trailing dots/spaces.
     .replace(/[. ]+$/g, '')
     .trim();
 
   if (name.includes('..')) {
-    throw new ToolError('INVALID_FILENAME', `Filename must not contain "..": ${JSON.stringify(input)}`);
+    throw invalidFilename(input, 'Filename must not contain ".."');
   }
 
   const wanted = `.${extension}`;
@@ -36,16 +46,27 @@ export function sanitizeFilename(input: string, extension: ExportFormat): string
   }
   name = name.replace(/[. ]+$/g, '').trim();
 
+  // Cap by encoded byte length, truncating at a character boundary; run the
+  // reserved-name check afterwards so truncation cannot resurrect one.
+  while (Buffer.byteLength(name, 'utf8') > MAX_BASENAME_BYTES) {
+    name = name.slice(0, -1);
+  }
+  name = name.replace(/[. ]+$/g, '').trim();
+
   if (name === '') {
-    throw new ToolError('INVALID_FILENAME', `Filename is empty after sanitization: ${JSON.stringify(input)}`);
+    throw invalidFilename(input, 'Filename is empty after sanitization');
   }
-  if (WINDOWS_RESERVED.test(name)) {
-    throw new ToolError('INVALID_FILENAME', `Filename is a reserved device name: ${JSON.stringify(input)}`);
-  }
-  if (name.length > MAX_BASENAME_LENGTH) {
-    name = name.slice(0, MAX_BASENAME_LENGTH).replace(/[. ]+$/g, '');
+  // Windows reserves device names based on the segment before the first dot
+  // ("CON.txt" is just as reserved as "CON").
+  const stem = name.split('.')[0] ?? name;
+  if (WINDOWS_RESERVED.test(stem)) {
+    throw invalidFilename(input, 'Filename is a reserved device name');
   }
   return `${name}${wanted}`;
+}
+
+function timestamp(now: Date = new Date()): string {
+  return now.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 }
 
 export function defaultFilename(
@@ -55,15 +76,26 @@ export function defaultFilename(
   extension: ExportFormat,
   now: Date = new Date(),
 ): string {
-  const stamp = now.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
   const range = endDate ? `${startDate}_${endDate}` : startDate;
-  return `toggl-${reportType}-${range}-${stamp}.${extension}`;
+  return `toggl-${reportType}-${range}-${timestamp(now)}.${extension}`;
+}
+
+/**
+ * Inserts a timestamp before the extension. Used for upstream-suggested
+ * (Content-Disposition) names, which are derived from the date range and
+ * would otherwise collide on every re-export.
+ */
+export function appendTimestamp(filename: string, now: Date = new Date()): string {
+  const { name, ext } = path.parse(filename);
+  return `${name}-${timestamp(now)}${ext}`;
 }
 
 /**
  * Writes bytes into the export directory atomically and race-free:
  * the payload is written to a private temp file first, then hard-linked into
  * the final name so the OS arbitrates collisions (EEXIST -> numeric suffix).
+ * On filesystems without hard links (exFAT/FAT32, some network mounts) it
+ * falls back to an exclusive copy, preserving the no-overwrite guarantee.
  * Readers never observe a partially written file, and the temp file is
  * removed on every path, including failures.
  */
@@ -72,15 +104,15 @@ export async function writeExportFile(
   filename: string,
   bytes: Buffer,
 ): Promise<string> {
-  const resolved = path.resolve(exportDir, filename);
-  if (!resolved.startsWith(exportDir + path.sep)) {
+  const relative = path.relative(exportDir, path.resolve(exportDir, filename));
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative) || relative.includes(path.sep)) {
     throw new ToolError(
       'INVALID_FILENAME',
       `Filename escapes the export directory: ${JSON.stringify(filename)}`,
     );
   }
 
-  const tmp = path.join(exportDir, `.toggl-report-tmp-${crypto.randomBytes(8).toString('hex')}`);
+  const tmp = path.join(exportDir, `${TEMP_FILE_PREFIX}${crypto.randomBytes(8).toString('hex')}`);
   try {
     await fsp.writeFile(tmp, bytes, { flag: 'wx', mode: 0o600 });
     const { name, ext } = path.parse(filename);
@@ -91,7 +123,20 @@ export async function writeExportFile(
         await fsp.link(tmp, target);
         return target;
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue;
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST') continue;
+        if (code === 'EPERM' || code === 'ENOTSUP' || code === 'ENOSYS' || code === 'EXDEV') {
+          try {
+            await fsp.copyFile(tmp, target, fsConstants.COPYFILE_EXCL);
+            return target;
+          } catch (copyErr) {
+            if ((copyErr as NodeJS.ErrnoException).code === 'EEXIST') continue;
+            throw new ToolError(
+              'FILE_WRITE_ERROR',
+              `Could not write export file ${candidate}: ${(copyErr as Error).message}`,
+            );
+          }
+        }
         throw new ToolError(
           'FILE_WRITE_ERROR',
           `Could not write export file ${candidate}: ${(err as Error).message}`,
@@ -108,22 +153,59 @@ export async function writeExportFile(
 }
 
 /**
- * Counts CSV data rows (excluding the header row). Quoted fields may contain
- * newlines, so newlines inside quotes are not record separators.
+ * Removes temp files left behind by a crashed or killed previous run. Only
+ * files old enough to not belong to a concurrently running instance are
+ * touched.
+ */
+export async function cleanStaleTempFiles(
+  exportDir: string,
+  maxAgeMs: number = STALE_TEMP_MAX_AGE_MS,
+): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(exportDir);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - maxAgeMs;
+  for (const entry of entries) {
+    if (!entry.startsWith(TEMP_FILE_PREFIX)) continue;
+    const file = path.join(exportDir, entry);
+    try {
+      const stat = await fsp.lstat(file);
+      if (stat.isFile() && stat.mtimeMs < cutoff) {
+        await fsp.unlink(file);
+      }
+    } catch {
+      // Raced with another process; nothing to do.
+    }
+  }
+}
+
+/**
+ * Counts CSV data rows (excluding the header row). Scans the buffer directly
+ * (quote/CR/LF bytes cannot occur inside UTF-8 multibyte sequences) to avoid
+ * a second full-string copy of large exports. Quoted fields may contain
+ * newlines; CRLF, LF, and bare-CR record separators are all recognized.
+ * Structurally invalid CSV (an unbalanced quote) yields a best-effort count.
  */
 export function countCsvRows(bytes: Buffer): number {
-  const text = bytes.toString('utf8');
+  const QUOTE = 0x22;
+  const LF = 0x0a;
+  const CR = 0x0d;
   let records = 0;
   let inQuotes = false;
   let hasContent = false;
-  for (const ch of text) {
-    if (ch === '"') {
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i]!;
+    if (byte === QUOTE) {
       inQuotes = !inQuotes;
       hasContent = true;
-    } else if (ch === '\n' && !inQuotes) {
+    } else if (!inQuotes && (byte === LF || byte === CR)) {
+      if (byte === CR && bytes[i + 1] === LF) i++;
       if (hasContent) records++;
       hasContent = false;
-    } else if (ch !== '\r') {
+    } else {
       hasContent = true;
     }
   }
@@ -152,7 +234,14 @@ export async function listExportFiles(exportDir: string, limit: number): Promise
     const ext = path.extname(entry.name).toLowerCase();
     if (ext !== '.pdf' && ext !== '.csv') continue;
     const filePath = path.join(exportDir, entry.name);
-    const stat = await fsp.lstat(filePath);
+    let stat;
+    try {
+      stat = await fsp.lstat(filePath);
+    } catch (err) {
+      // The file may have been deleted between readdir and lstat.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
     results.push({
       filename: entry.name,
       file_path: filePath,

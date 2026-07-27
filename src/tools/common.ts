@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { ToolError } from '../errors.js';
 import {
+  appendTimestamp,
   countCsvRows,
   defaultFilename,
   sanitizeFilename,
@@ -17,6 +18,18 @@ import type { ReportType, TogglClient } from '../toggl-client.js';
 export interface ToolContext {
   client: TogglClient;
   exportDir: string;
+}
+
+/**
+ * In-flight export operations, tracked so shutdown can wait (briefly) for
+ * them to finish and clean up their temp files.
+ */
+export const inflightOperations = new Set<Promise<unknown>>();
+
+function tracked<T>(promise: Promise<T>): Promise<T> {
+  inflightOperations.add(promise);
+  promise.finally(() => inflightOperations.delete(promise)).catch(() => {});
+  return promise;
 }
 
 export const FILE_TOOL_DISCLAIMER =
@@ -122,13 +135,24 @@ export interface RunExportParams {
   signal?: AbortSignal;
 }
 
-export async function runExport(ctx: ToolContext, params: RunExportParams): Promise<CallToolResult> {
+export function runExport(ctx: ToolContext, params: RunExportParams): Promise<CallToolResult> {
+  return tracked(runExportInner(ctx, params));
+}
+
+async function runExportInner(
+  ctx: ToolContext,
+  params: RunExportParams,
+): Promise<CallToolResult> {
   const { reportType, format, startDate, endDate, signal } = params;
+  // One wall-clock budget for the whole tool call (workspace lookup, export,
+  // retries), so stacked waits cannot outlive the client's tool-call timeout.
+  const deadline = ctx.client.createCallDeadline();
 
   const workspaceId = await ctx.client.resolveWorkspaceId(
     params.workspaceId,
     `the ${reportType} report export`,
     signal,
+    deadline,
   );
 
   const { bytes, contentDispositionFilename } = await ctx.client.exportReport({
@@ -137,6 +161,12 @@ export async function runExport(ctx: ToolContext, params: RunExportParams): Prom
     workspaceId,
     body: params.body,
     signal,
+    deadline,
+    // Spend a fresh workspace lookup on AUTH_FAILED only when the workspace
+    // ID was supplied by the caller or the env default: those are the cases
+    // where "wrong workspace" is the likely cause. Auto-detected workspaces
+    // already populated the cache.
+    enrichAuthErrors: params.workspaceId !== undefined || ctx.client.hasDefaultWorkspace,
   });
 
   let filename: string;
@@ -144,7 +174,9 @@ export async function runExport(ctx: ToolContext, params: RunExportParams): Prom
     filename = sanitizeFilename(params.filename, format);
   } else if (contentDispositionFilename) {
     try {
-      filename = sanitizeFilename(contentDispositionFilename, format);
+      // Toggl derives the suggested name from the date range, so repeats
+      // would collide; a timestamp keeps names distinguishable.
+      filename = sanitizeFilename(appendTimestamp(contentDispositionFilename), format);
     } catch {
       filename = defaultFilename(reportType, startDate, endDate, format);
     }
@@ -152,6 +184,9 @@ export async function runExport(ctx: ToolContext, params: RunExportParams): Prom
     filename = defaultFilename(reportType, startDate, endDate, format);
   }
 
+  if (signal?.aborted) {
+    throw new ToolError('CANCELLED', 'The tool call was cancelled.');
+  }
   const filePath = await writeExportFile(ctx.exportDir, filename, bytes);
 
   const structured: Record<string, unknown> = {
@@ -182,14 +217,16 @@ export async function runExport(ctx: ToolContext, params: RunExportParams): Prom
 }
 
 export function toErrorResult(err: unknown): CallToolResult {
+  // Flat envelope ({ error: true, code, message, ... }) mirroring
+  // mcp-toggl's errorPayload() shape, so a model that learned to recover
+  // from one server's errors handles the other identically.
   const payload =
     err instanceof ToolError
-      ? { error: err.toPayload() }
+      ? { error: true, ...err.toPayload() }
       : {
-          error: {
-            code: 'INTERNAL_ERROR',
-            message: err instanceof Error ? err.message : String(err),
-          },
+          error: true,
+          code: 'INTERNAL_ERROR',
+          message: err instanceof Error ? err.message : String(err),
         };
   return {
     isError: true,

@@ -457,8 +457,34 @@ Packaging details that break `npx` if forgotten:
     reports exist anywhere). Row-count reporting and a live >50-row test assertion
     retained as cheap guardrails.
 
+## Post-review implementation notes (deviations from the text above)
+
+A three-model review of the implementation produced a fix pass; where the
+implementation deliberately deviates from this plan's wording, the deviation is
+recorded here:
+
+1. **Bounded buffering instead of streaming to disk.** Bodies are read through a
+   size-capped reader (`TOGGL_MAX_EXPORT_MB`, default 100 MB) rather than
+   streamed to the temp file: validation (magic bytes, CSV sniffing) and row
+   counting need the bytes anyway, and the cap bounds memory. Oversized
+   responses fail with `RESPONSE_TOO_LARGE`.
+2. **Hard link with exclusive-copy fallback instead of `rename`.** Link + EEXIST
+   is a stronger no-overwrite primitive than `rename` (which silently
+   replaces); on filesystems without hard links (exFAT/FAT32, some network
+   mounts) the write falls back to `copyFile(..., COPYFILE_EXCL)`.
+3. **Weekly `end_date` is optional.** The weekly report is a 7-day grid anchored
+   at `start_date`; the API derives the end. This is a deliberate exception to
+   the "both dates required" rule.
+4. **Error payloads are flat** (`{ error: true, code, message, ... }`), matching
+   mcp-toggl's actual `errorPayload()` shape (verified against its source) —
+   the plan's nested `{ error: { ... } }` sketch was wrong about their format.
+5. **Schema-level validation errors** (e.g. an impossible calendar date) are
+   rejected by the MCP SDK as protocol errors, not as our JSON payload shape.
+   Cross-field checks that we control (date ordering) do use the JSON shape.
+
 ## Remaining open questions
 
 1. **Single-day and maximum date ranges** — Toggl docs suggest `end_date` must be
-   greater than `start_date` and hint at a maximum supported period; verified live,
-   then encoded in zod validation and error messages.
+   greater than `start_date` and hint at a maximum supported period; verified by
+   the credential-gated live contract test (`npm run test:live`), which also
+   asserts >50-row CSV completeness (the pagination guardrail).

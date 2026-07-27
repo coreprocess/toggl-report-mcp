@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ToolError } from '../src/errors.js';
 import {
+  appendTimestamp,
+  cleanStaleTempFiles,
   countCsvRows,
   defaultFilename,
   listExportFiles,
@@ -32,9 +34,11 @@ describe('sanitizeFilename', () => {
     expect(sanitizeFilename('report.pdf', 'csv')).toBe('report.pdf.csv');
   });
 
-  it('strips path separators and control characters', () => {
+  it('strips path separators, control characters, and Windows-invalid characters', () => {
     expect(sanitizeFilename('a/b\\c.csv', 'csv')).toBe('abc.csv');
     expect(sanitizeFilename('re\u0000po\u001frt.csv', 'csv')).toBe('report.csv');
+    expect(sanitizeFilename('a:b*c?d.csv', 'csv')).toBe('abcd.csv');
+    expect(sanitizeFilename('"quoted"<x>|y.csv', 'csv')).toBe('quotedxy.csv');
   });
 
   it('rejects traversal, reserved names, and empty results', () => {
@@ -46,12 +50,35 @@ describe('sanitizeFilename', () => {
     expect(() => sanitizeFilename('...', 'csv')).toThrow(ToolError);
   });
 
-  it('removes trailing dots and spaces and caps the length', () => {
+  it('rejects reserved device names hiding behind another extension', () => {
+    // Windows reserves the segment before the first dot: CON.txt is reserved.
+    expect(() => sanitizeFilename('CON.txt', 'csv')).toThrow(ToolError);
+    expect(() => sanitizeFilename('nul.report.csv', 'csv')).toThrow(ToolError);
+  });
+
+  it('removes trailing dots and spaces and caps the length in bytes', () => {
     expect(sanitizeFilename('name... ', 'csv')).toBe('name.csv');
     const long = 'x'.repeat(300);
     const result = sanitizeFilename(long, 'csv');
     expect(result.length).toBeLessThanOrEqual(124);
     expect(result.endsWith('.csv')).toBe(true);
+    // Multibyte names are capped by byte length, not UTF-16 units.
+    const cjk = sanitizeFilename('日'.repeat(200), 'csv');
+    expect(Buffer.byteLength(cjk, 'utf8')).toBeLessThanOrEqual(124);
+    expect(cjk.endsWith('.csv')).toBe(true);
+  });
+
+  it('does not let length truncation resurrect a reserved name', () => {
+    expect(() => sanitizeFilename('con' + '. '.repeat(70) + 'x', 'csv')).toThrow(ToolError);
+  });
+});
+
+describe('appendTimestamp', () => {
+  it('inserts a timestamp before the extension', () => {
+    const now = new Date('2026-07-27T01:02:03.456Z');
+    expect(appendTimestamp('toggl_stub_export.csv', now)).toBe(
+      'toggl_stub_export-20260727-010203.csv',
+    );
   });
 });
 
@@ -101,12 +128,50 @@ describe('writeExportFile', () => {
     await expect(
       writeExportFile(exportDir, '../escape.csv', Buffer.from('x')),
     ).rejects.toMatchObject({ code: 'INVALID_FILENAME' });
+    await expect(
+      writeExportFile(exportDir, '/etc/escape.csv', Buffer.from('x')),
+    ).rejects.toMatchObject({ code: 'INVALID_FILENAME' });
+    await expect(
+      writeExportFile(exportDir, 'sub/dir.csv', Buffer.from('x')),
+    ).rejects.toMatchObject({ code: 'INVALID_FILENAME' });
+  });
+
+  it('does not follow a symlink planted at the destination', async () => {
+    const outside = path.join(os.tmpdir(), `toggl-outside-${Date.now()}.txt`);
+    await fsp.writeFile(outside, 'original');
+    await fsp.symlink(outside, path.join(exportDir, 'report.csv'));
+    try {
+      const target = await writeExportFile(exportDir, 'report.csv', Buffer.from('payload'));
+      // The symlink occupies the name, so the write lands on a suffixed name
+      // and the symlink target is untouched.
+      expect(target).toBe(path.join(exportDir, 'report-1.csv'));
+      expect(await fsp.readFile(outside, 'utf8')).toBe('original');
+    } finally {
+      await fsp.unlink(outside).catch(() => {});
+    }
   });
 
   it('leaves no temp files behind', async () => {
     await writeExportFile(exportDir, 'report.csv', Buffer.from('data'));
     const leftovers = (await fsp.readdir(exportDir)).filter((name) => name.startsWith('.toggl'));
     expect(leftovers).toEqual([]);
+  });
+});
+
+describe('cleanStaleTempFiles', () => {
+  it('removes only old temp files', async () => {
+    const oldTemp = path.join(exportDir, '.toggl-report-tmp-old');
+    const freshTemp = path.join(exportDir, '.toggl-report-tmp-fresh');
+    const unrelated = path.join(exportDir, 'report.csv');
+    await fsp.writeFile(oldTemp, 'x');
+    await fsp.writeFile(freshTemp, 'x');
+    await fsp.writeFile(unrelated, 'x');
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await fsp.utimes(oldTemp, old, old);
+
+    await cleanStaleTempFiles(exportDir);
+    const remaining = (await fsp.readdir(exportDir)).sort();
+    expect(remaining).toEqual(['.toggl-report-tmp-fresh', 'report.csv']);
   });
 });
 
@@ -120,6 +185,14 @@ describe('countCsvRows', () => {
 
   it('does not split on newlines inside quoted fields', () => {
     expect(countCsvRows(Buffer.from('a,b\n"multi\nline",2\n'))).toBe(1);
+    expect(countCsvRows(Buffer.from('a,b\r\n"multi\r\nline",2\r\n'))).toBe(1);
+  });
+
+  it('handles CRLF, bare CR, escaped quotes, and a BOM', () => {
+    expect(countCsvRows(Buffer.from('a,b\r\n1,2\r\n3,4\r\n'))).toBe(2);
+    expect(countCsvRows(Buffer.from('a,b\r1,2\r'))).toBe(1);
+    expect(countCsvRows(Buffer.from('a,b\n"say ""hi""",2\n'))).toBe(1);
+    expect(countCsvRows(Buffer.from('\uFEFFa,b\n1,2\n'))).toBe(1);
   });
 });
 
