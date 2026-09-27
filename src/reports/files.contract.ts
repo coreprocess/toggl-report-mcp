@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 import type { ReportToolContext } from './filters.contract.ts';
-import { runTool, toStructuredResult } from './results.ts';
+import { outputSchema, runTool, toStructuredResult } from './results.ts';
 
 /** Registers the export listing tool on the server. */
 export function registerFileTools(context: ReportToolContext): void {
@@ -24,7 +24,7 @@ export function registerFileTools(context: ReportToolContext): void {
           .default(50)
           .describe('Maximum number of files to return, default 50'),
       },
-      outputSchema: {
+      outputSchema: outputSchema({
         export_dir: z.string().describe('Absolute export directory'),
         files: z
           .array(
@@ -36,7 +36,7 @@ export function registerFileTools(context: ReportToolContext): void {
             }),
           )
           .describe('Export files, newest first'),
-      },
+      }),
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
     (args) =>

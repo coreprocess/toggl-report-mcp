@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { ExportFormat, FilenameInput, type ReportToolContext } from './filters.contract.ts';
 import {
   EXPORT_ANNOTATIONS,
-  exportOutputShape,
+  exportOutputSchema,
   READ_ANNOTATIONS,
   runExport,
   runTool,
@@ -64,7 +64,7 @@ export function registerSavedTools(context: ReportToolContext): void {
         format: ExportFormat.describe('File format of the export'),
         filename: FilenameInput,
       },
-      outputSchema: exportOutputShape,
+      outputSchema: exportOutputSchema,
       annotations: EXPORT_ANNOTATIONS,
     },
     (args, extra) =>

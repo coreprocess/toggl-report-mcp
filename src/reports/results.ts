@@ -23,8 +23,16 @@ const MIME_TYPES: Record<ExportFormat, string> = {
 /** Report families that can be exported. */
 type ReportType = 'detailed' | 'summary' | 'weekly' | 'saved';
 
+/**
+ * Builds a tool output schema without a `$schema` key. The SDK emits draft-07 and labels
+ * it, which clients validating JSON Schema 2020-12 only (e.g. Claude Desktop) reject.
+ */
+export function outputSchema<Shape extends z.ZodRawShape>(shape: Shape) {
+  return z.object(shape).meta({ $schema: undefined });
+}
+
 /** Structured output of every export tool. */
-export const exportOutputShape = {
+export const exportOutputSchema = outputSchema({
   file_path: z.string().describe('Absolute path of the written file'),
   file_size_bytes: z.number().int().describe('Size of the written file in bytes'),
   format: z.enum(['pdf', 'csv', 'xlsx']).describe('File format of the export'),
@@ -38,7 +46,7 @@ export const exportOutputShape = {
     .object({ start_date: z.string().nullable(), end_date: z.string().nullable() })
     .describe('Date range as requested; null bounds were left to Toggl defaults'),
   row_count: z.number().int().optional().describe('Data rows excluding the header (csv only)'),
-};
+});
 
 /** Annotations of every export tool: writes a new local file, calls the Toggl API. */
 export const EXPORT_ANNOTATIONS = {

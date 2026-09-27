@@ -14,7 +14,7 @@ import {
 import {
   assertDateOrder,
   EXPORT_ANNOTATIONS,
-  exportOutputShape,
+  exportOutputSchema,
   fetchWorkspaceJson,
   READ_ANNOTATIONS,
   runExport,
@@ -91,7 +91,7 @@ export function registerWeeklyTools(context: ReportToolContext): void {
         logo_url: z.string().optional().describe('Logo shown on the report (pdf only)'),
         cents_separator: z.string().optional().describe('Cents separator character (pdf only)'),
       },
-      outputSchema: exportOutputShape,
+      outputSchema: exportOutputSchema,
       annotations: EXPORT_ANNOTATIONS,
     },
     (args, extra) =>

@@ -20,7 +20,7 @@ import {
 import {
   assertDateOrder,
   EXPORT_ANNOTATIONS,
-  exportOutputShape,
+  exportOutputSchema,
   fetchWorkspaceJson,
   READ_ANNOTATIONS,
   runExport,
@@ -135,7 +135,7 @@ export function registerSummaryTools(context: ReportToolContext): void {
         resolution: Resolution.optional().describe('Graph resolution (pdf only)'),
         cents_separator: z.string().optional().describe('Cents separator character (pdf only)'),
       },
-      outputSchema: exportOutputShape,
+      outputSchema: exportOutputSchema,
       annotations: EXPORT_ANNOTATIONS,
     },
     (args, extra) =>

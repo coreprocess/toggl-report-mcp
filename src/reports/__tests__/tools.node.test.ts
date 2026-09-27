@@ -146,6 +146,17 @@ describe('report tools', () => {
     ]);
   });
 
+  it('declares output schemas without a $schema dialect', async () => {
+    // Claude Desktop rejects output schemas labelled draft-07; unlabelled ones validate.
+    const { tools } = await harness.mcp.listTools();
+    const withOutput = tools.filter((tool) => tool.outputSchema !== undefined);
+    expect(withOutput).toHaveLength(5);
+    for (const tool of withOutput) {
+      expect(tool.outputSchema).not.toHaveProperty('$schema');
+      expect(tool.outputSchema?.properties).not.toEqual({});
+    }
+  });
+
   it('exports a csv weekly report, stripping pdf-only options from the body', async () => {
     responses.push(new Response('user,mon\nalice,1\nbob,2\n', { status: 200 }));
 

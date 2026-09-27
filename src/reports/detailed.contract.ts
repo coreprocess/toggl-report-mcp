@@ -17,7 +17,7 @@ import {
 import {
   assertDateOrder,
   EXPORT_ANNOTATIONS,
-  exportOutputShape,
+  exportOutputSchema,
   fetchWorkspaceJson,
   READ_ANNOTATIONS,
   runExport,
@@ -155,7 +155,7 @@ export function registerDetailedTools(context: ReportToolContext): void {
         hour_format: z.string().optional().describe('Hour rendering (pdf only)'),
         cents_separator: z.string().optional().describe('Cents separator character (pdf only)'),
       },
-      outputSchema: exportOutputShape,
+      outputSchema: exportOutputSchema,
       annotations: EXPORT_ANNOTATIONS,
     },
     (args, extra) =>
