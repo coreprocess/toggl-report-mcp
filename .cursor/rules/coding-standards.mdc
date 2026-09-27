@@ -1,0 +1,238 @@
+---
+description: Core coding standards for the toggl-report-mcp repository
+alwaysApply: true
+---
+
+# toggl-report-mcp coding standards
+
+Conventions for this repository, read from the outside in: setup, then architecture and
+boundaries, then the code itself, then workflow.
+
+## Project setup
+
+### Stack & tooling
+- **Runtime:** ESM-only TypeScript on Node. Exact versions live in `package.json`.
+- **Package manager:** pnpm only — never npm or yarn.
+- **Lint & format:** Biome only (`biome.json`).
+- **Dead code:** Knip (`knip.json`) finds unused files, exports, and dependencies.
+- **Building blocks:** the MCP SDK (`@modelcontextprotocol/sdk`) + Zod for tool schemas;
+  tsdown bundles the stdio server to `dist/main.js`.
+
+### Repository layout
+- A single private package (`toggl-report-mcp`, `"type": "module"`); all source lives
+  under `src/`, split into subpackages (`config/`, `toggl/`, `store/`, `reports/`) with
+  `src/main.ts` as the stdio entry point.
+
+### Terminology
+- **Package** — the repository's one `package.json` unit; the dependency and
+  `exports`/`imports` boundary.
+- **Subpackage** — a folder directly under `src/`; the encapsulation boundary.
+  Deeper subfolders are organization only.
+- **File** — a single `.ts` source file. Node calls this a "module"; we always say *file*.
+
+## Architecture & boundaries
+
+### Simplicity
+- **Favor concrete, direct code.** Every abstraction, layer, or hop is something a reader
+  must see through and someone must maintain. Add one only when it earns its keep.
+- **Right-size each unit.** A package, subpackage, or file exists to hold code that belongs
+  together — make one only when there is enough related code to fill it. Don't put a single
+  file in its own subpackage or a few lines in their own file; keep that code with the rest.
+- **Abstractions:** introduce one only for a real need — two or more implementations behind
+  a shared interface, or a genuinely repeated shape worth unifying — never for a single caller.
+- **Layers:** add a layer only when it untangles the flow, not to add ceremony.
+- **No premature optimization.** Write the clear, straightforward version first; optimize
+  only when a real, measured bottleneck demands it — never on suspicion. When you do
+  optimize, keep the measurement in reach (a benchmark or profile) so the added complexity
+  stays justified.
+- **Indirection:** no barrel files, re-exports, or aliasing (`const X = Y`,
+  `export { X as Y }`) unless it adds real value; import the original directly.
+
+### Subpackages & contracts
+- **Public surface:** a subpackage's `*.contract.ts` file(s) are its stable interface;
+  everything else in the subpackage is internal.
+- **Define in place:** implement public types and functions directly in a `*.contract.ts` —
+  not in a separate file the contract re-exports. Split a large surface across several
+  contract files, each defining its part directly, never funnelling through a facade.
+- **Placement:** a contract normally sits at the subpackage root; a deeper folder is fine
+  when it aids organization. The alias resolves the full path either way
+  (`#reports/filters` → `src/reports/filters.contract.ts`).
+- **Loose files:** only execution entry points may sit loose under `src/` — the server's
+  `main.ts`, or a named `*.main.ts` for a standalone entry point such as a generator.
+  Everything else belongs to a subpackage.
+
+### Files & folders
+- **Size:** aim for cohesive files of ~200–300 lines — a soft target. Let cohesion decide
+  where a file starts and ends; line count is only a prompt to re-examine.
+- **Don't over-fragment:** keep closely related code together so a reader follows it in one
+  place. Thin `*.contract.ts` and genuinely single-purpose files are naturally short — fine.
+- **Splitting:** when a file pushes well past ~400 lines or juggles unrelated concerns, split
+  it along those seams into focused files in the same subpackage.
+- **Grouping:** group split-out files in a subfolder when it aids navigation. Inner folders
+  are organization only — they form no new boundary; the subpackage's contract stays public.
+
+### Imports
+- **Aliases resolve to contracts only:** `#*` maps to `*.contract.ts`
+  (`#toggl/client` → `src/toggl/client.contract.ts`). Non-contract paths won't resolve — Node
+  enforces the boundary.
+- **Within a subpackage:** use relative imports with the explicit `.ts` extension; they may
+  reach any internal file (`import { sharedFilterShape } from './filters.contract.ts'`).
+- **Across subpackages:** import only the other's contract via the extensionless alias —
+  `#store/store`, never a deep path. Never reach into another subpackage's internals.
+- **Node builtins:** import with the `node:` prefix.
+
+### Dependencies & layering
+- **No circular dependencies, ever — at any level** (file, subpackage, or package). A cycle
+  means two things are really one; merge them, or extract the shared piece into a third.
+- **One direction:** code flows one way; lower layers never reach back into higher ones. A
+  clear sense of direction is far easier to follow than a fuzzy mesh.
+
+### Exports & dead code
+- **Export sparingly.** Add an export only when a consumer appears — file-local until a
+  sibling needs it, on the contract only when another subpackage does — and drop it when the
+  last consumer goes. Every export is a standing commitment.
+- **No dead code.** `pnpm knip` runs in production mode, so a test importing a symbol is *not*
+  proof it is used — code reachable only from tests is dead. Remove what Knip flags.
+- **Escape hatches** — each a JSDoc tag at the very start of the comment directly above the
+  export it justifies (never appended at the end or buried mid-block). Knip is configured to
+  skip tagged exports, so the tag is what silences the finding:
+  - `@exportForFutureUse <why>` — keep an unused symbol whose consumer is imminent; state the
+    reason and drop the tag when the consumer lands.
+  - `@exportForTestsOnly` — a genuine test-only helper, or an export surfaced solely for a
+    test. Keep shared test infrastructure in a `testing` subpackage behind its contract.
+
+## Language & style
+
+### TypeScript
+- **Compiler:** `strict`, plus `noUncheckedIndexedAccess`, `noImplicitOverride`,
+  `noFallthroughCasesInSwitch`, `verbatimModuleSyntax`, `isolatedModules`, `erasableSyntaxOnly`.
+- **Basics:** `const` by default, `let` only where reassignment is genuinely needed, `var`
+  never; no `namespace`; prefer `as const`; no unused variables.
+- **Type imports:** write as `import type { ... }`.
+- **Avoid `any`.** Reserved for genuinely exceptional cases — exhaust generics and precise
+  interfaces first, and when truly unavoidable scope it as narrowly as possible and say why.
+- **`unknown` over `any` at untyped boundaries.** Use `unknown` only where types genuinely
+  end (parsing, deserialization), and narrow it before use — it is not a general-purpose type.
+- **When a type error fights the task:** fix it only if the fix stays within the task's scope
+  and direction. If it would change direction, alter a contract, or expand the task, STOP and
+  raise it with a human — never paper over it by weakening types (casting, `any`).
+
+### Formatting
+- **Braces always, bodies on their own line.** Every `if`, `else`, `for`, and `while` body
+  gets its own braced block, even a single statement — write it as `if (done) {`, then
+  `  return;`, then `}`. Never collapse it to `if (done) return;` or `if (ok) a = b;`.
+- **Biome owns the rest.** Spacing, quotes, semicolons, and wrapping are Biome's job — run
+  `pnpm fix`, never hand-format against it.
+
+### Naming
+- **Functions start with a verb,** using established prefixes: `create*`, `get*`/`list*`,
+  `build*`, `parse*`/`encode*`/`decode*`, `resolve*`/`compile*`, `to<Shape>` for pure
+  converters, `is*`/`has*` for booleans and type guards.
+- **Public types name their subpackage's concept** so they read clearly at the import site —
+  `StoredExport` (`store`), `JsonReportResult` (`toggl`). The test is
+  whether the name states what the subpackage is about, not its length: `Value` is fine where
+  values *are* the concept; a catch-all `Record`, `Status`, `Result`, or `Options` never is.
+- **Casing:** types, interfaces, and Zod schemas are PascalCase; an exported schema and its
+  inferred type share one name (`ExportFormat`).
+- **Internal vs public:** internal types stay unexported and describe their narrow role — a
+  raw wire shape mirroring Toggl's snake_case stays internal; the public type crossing the
+  boundary carries the subpackage's concept.
+- **Wire shapes:** in Zod tool schemas, suffix by direction — `*Input` for tool inputs,
+  `*Output` for structured outputs. Omit the suffix only for genuinely both-sided shapes.
+
+### Patterns
+- **Functions by default; a class when you're already writing one.** Plain functions are the
+  default unit of code. But don't emulate a class with closures — a `create*` factory that
+  captures mutable state and returns an object of methods *is* a class in disguise, only with
+  invisible fields and an anonymous type. At that point write the real `class`: it names the
+  concept, shows its state as declared fields, and costs nothing extra. The preference for
+  functions is about avoiding needless statefulness, not about avoiding the `class` keyword.
+- **Wire dependencies once, at the composition root.** `src/main.ts` builds the client,
+  store and server and hands them to the tool registrations as one explicit bag
+  (`ReportToolContext`). Inject I/O boundaries through construction parameters (the Toggl
+  client takes its `fetch` implementation) so production wiring and test fakes use the same
+  seam — never reach for module-level singletons or hidden globals.
+- **No default or optional function parameters.** Every positional parameter is required and
+  passed explicitly — never a `=` default or a `?` optional. An explicit `| undefined` type is
+  still fine; it forces the caller to pass the argument, whereas `?:` lets them omit it. When a
+  caller truly needs optionality, reach for a parameter bag (a single options object) rather
+  than an optional positional. This rule targets parameters only: *properties* of a bag, patch
+  shape, or Zod schema may be optional when omission itself carries meaning.
+- **Parameter bags over long signatures.** When a function reaches ~6 parameters, consider
+  collecting them into one bag — but do it wholesale, not for a lone straggler, and align the
+  choice across the sibling functions it belongs to. A uniform shape across siblings outweighs
+  the exact count; the threshold only prompts the question.
+- **Keep `undefined` and `null` distinct.** Don't collapse the two without a good reason — let
+  each carry its own meaning. In patch-like shapes this is the whole point: `undefined` means
+  *left out, don't touch*, while `null` means *reset, set to null*. Merge them only when the
+  distinction genuinely carries no signal.
+- **Zod:** co-locate a schema with its inferred TS type.
+
+### Error handling
+- **Never eat an error.** Let failures surface as exceptions — an unhandled throw is louder
+  and safer than a silent miss. A `try { ... } catch {}` that swallows the problem is banned.
+- **`try*` functions surface via return.** When a caller genuinely needs a non-throwing path,
+  model the miss in the return value — `tryParse` yields its result or a failure marker, never
+  an exception it quietly drops.
+- **Catch only what you can name.** When business logic must filter one specific failure,
+  detect exactly that and rethrow the rest — `catch (err) { if (!isThat(err)) throw err; ... }`.
+  A bare `catch` that discards an unrecognized error is forbidden.
+- **Switches throw their default.** Handle every real case explicitly; when no fallback makes
+  sense, end with `default: throw ...` so an unforeseen value fails loudly instead of slipping
+  through unnoticed.
+
+### Documentation
+- **Syntax follows place.** Inside a function body, use line comments (`//`). Everywhere else —
+  file headers, and the description above every export, type, class, and field — use a JSDoc
+  block: `/** ... */` on one line when it fits, else the starred multiline form (`/**`, then
+  ` * ` per line, then ` */`).
+- **What comments add:** the concept, intent, invariants, and trade-offs the code cannot say.
+  Summarize what a block does and why; never restate a name, type, or adjacent statement.
+- **File header:** open every source file with a 1–5 line block stating its purpose.
+- **Exports:** put concise JSDoc on every exported type and function — what it is and why,
+  never an echo of its signature.
+- **Density is a quota, not a ceiling.** Hit these by default, omitting one only when it cannot
+  add value: the file header; 1–3 lines above every function, class, and type; one line comment
+  opening each body segment.
+- **Segment function bodies.** Read a body as a sequence of steps: separate each from the next
+  with a blank line and open it with a single `//` comment stating what it does and why. A
+  segment spans roughly 3–10 lines; split it when it outgrows that or does two things. A
+  single-step body is one segment, needing no internal blank lines.
+- **Comments do double duty:** beyond intent, they give a file visual structure, breaking a
+  code desert into labelled sections that are faster to scan and navigate.
+- **Self-contained, no cross-references — strict.** Keep every comment understandable in place,
+  with nothing to chase: no `{@link}`/`@see`, no "see X", no "as in `<file>`", no spec-section
+  (`§`) or path citations, no "above"/"below" — they go stale fast. You may name a symbol in
+  backticked prose when it aids understanding, never as a pointer to go read it elsewhere.
+
+### Vendored code
+- **What counts as vendored:** files copied from an upstream source and owned here (none
+  exist currently). Each opens with a file header naming its origin.
+- **Relaxed documentation quota.** Vendored files are exempt from per-export JSDoc and
+  body-segmentation comments: staying structurally close to upstream keeps future diffs
+  against the source reviewable. The file header is still mandatory.
+- **Everything else still applies:** contract naming, import rules, Biome formatting, and the
+  type-safety rules. Adaptations stay mechanical (aliases, stripped directives, renames) —
+  never silent semantic changes.
+- **The exemption covers only what was copied.** Code written around vendored files — new
+  components, wrappers, helpers — follows the full standards.
+
+## Workflow
+
+### Testing
+- **Framework:** Vitest (root `vitest.config.ts`, `pnpm test`), node runtime only. Tests
+  live in a `__tests__/` folder inside their subpackage and are named `*.node.test.ts`
+  (bare `*.test.ts` is ignored); they may use `node:*` builtins.
+- **Assertions:** all from `vitest` — `expect` for value checks, `assert(value, message)` for
+  presence/narrowing guards. No `node:test` / `node:assert`.
+- **Fake the network, not the code:** tool tests run the real `McpServer` over an in-memory
+  transport with a real client whose injected `fetch` is a recording fake — no mocking of
+  our own units.
+
+### Definition of done
+- Before finishing any work, all of these must pass: `pnpm typecheck`, `pnpm lint` (or
+  `pnpm fix`), `pnpm test`, and `pnpm knip`.
+
+### Git
+- Commit messages, branch flow, and version tags are governed by `PROJECT.md` and the skills
+  in `.claude/skills/`. Never add AI co-author trailers.

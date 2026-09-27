@@ -1,10 +1,9 @@
+/** Vitest configuration: node-runtime tests colocated in __tests__ folders. */
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    include: ['src/**/__tests__/**/*.node.test.ts'],
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
-    testTimeout: 30_000,
-    hookTimeout: 30_000,
   },
 });

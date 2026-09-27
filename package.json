@@ -1,36 +1,14 @@
 {
   "name": "toggl-report-mcp",
   "version": "0.1.0",
-  "description": "MCP server for creating PDF/CSV report exports via the Toggl Reports API v3",
-  "type": "module",
-  "main": "dist/index.js",
-  "bin": {
-    "toggl-report-mcp": "dist/index.js"
-  },
-  "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "postbuild": "chmod +x dist/index.js",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit",
-    "pretest": "npm run build",
-    "test": "vitest run",
-    "test:live": "vitest run tests/live-contract.test.ts",
-    "test:coverage": "vitest run --coverage",
-    "lint": "eslint src/ tests/",
-    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "prepublishOnly": "npm run build && npm test"
-  },
+  "private": true,
+  "description": "Stdio MCP server for the Toggl Reports API v3 with local file exports",
   "keywords": [
     "mcp",
-    "mcp-server",
-    "modelcontextprotocol",
+    "model-context-protocol",
     "toggl",
     "toggl-track",
     "reports",
-    "export",
-    "pdf",
-    "csv",
     "time-tracking"
   ],
   "license": "MIT",
@@ -42,28 +20,40 @@
   "bugs": {
     "url": "https://github.com/coreprocess/toggl-report-mcp/issues"
   },
-  "engines": {
-    "node": "^20.19.0 || >=22.12.0"
-  },
+  "packageManager": "pnpm@10.33.0",
+  "type": "module",
   "files": [
     "dist/",
     "README.md",
     "LICENSE"
   ],
+  "bin": {
+    "toggl-report-mcp": "dist/main.js"
+  },
+  "imports": {
+    "#*": "./src/*.contract.ts"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "fix": "biome check --write .",
+    "test": "vitest run",
+    "knip": "knip --production"
+  },
+  "engines": {
+    "node": ">=24"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "dotenv": "^17.4.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
+    "@biomejs/biome": "^2.5.5",
     "@types/node": "^26.1.1",
-    "eslint": "^10.8.0",
-    "eslint-config-prettier": "^10.1.8",
-    "prettier": "^3.9.6",
-    "tsx": "^4.23.1",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "^8.65.0",
+    "knip": "^6.29.0",
+    "tsdown": "^0.22.13",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }
 }

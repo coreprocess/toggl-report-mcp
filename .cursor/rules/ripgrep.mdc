@@ -1,0 +1,37 @@
+---
+description: How to run ripgrep efficiently in this repo
+alwaysApply: true
+---
+
+# Searching with ripgrep (`rg`)
+
+The source tree is small, but the ignored trees are not (`node_modules`, `dist`, caches).
+A full traversal is slow, so keep `rg` scoped to **tracked, non-ignored files** unless the
+task genuinely needs the ignored ones.
+
+## Default
+
+- Let `rg` use its defaults: it already respects `.gitignore`/`.ignore` and skips hidden
+  files. That is what you want almost always.
+- Scope the search to the relevant path(s) rather than the repo root when you know where to
+  look (e.g. `rg "pattern" src/reports`).
+
+## Avoid unless explicitly needed
+
+Do **not** add traversal-widening flags by habit — they pull in `node_modules` and other
+ignored trees and make the search slow:
+
+- `-u` / `-uu` / `-uuu`
+- `--no-ignore` (and `--no-ignore-vcs`)
+- `--hidden`
+
+Only use them when the answer really can live in an ignored/hidden file (e.g. inspecting an
+installed dependency under `node_modules`), and even then scope to that subtree.
+
+```bash
+# GOOD — fast, tracked files only, scoped
+rg "registerTool" src/
+
+# BAD — traverses node_modules and build output, slow
+rg -uu "registerTool"
+```
