@@ -107,21 +107,14 @@ The workspace list is cached in-process for one hour.
 
 ## Getting started
 
-Requires Node ≥ 24 and pnpm.
-
-```bash
-pnpm install
-pnpm build        # bundles the server to dist/main.js
-```
-
-Then register it with your MCP client (stdio):
+Requires Node ≥ 24. Register the published package with your MCP client (stdio):
 
 ```json
 {
   "mcpServers": {
     "toggl-report": {
-      "command": "node",
-      "args": ["/path/to/toggl-report-mcp/dist/main.js"],
+      "command": "npx",
+      "args": ["-y", "toggl-report-mcp"],
       "env": {
         "TOGGL_API_KEY": "<your api token>",
         "TOGGL_EXPORT_DIR": "/absolute/path/to/exports",
@@ -131,6 +124,9 @@ Then register it with your MCP client (stdio):
   }
 }
 ```
+
+To run from a checkout instead, build with `pnpm install && pnpm build` and use
+`"command": "node", "args": ["/path/to/toggl-report-mcp/dist/main.js"]`.
 
 For interactive testing: `npx @modelcontextprotocol/inspector node dist/main.js`.
 

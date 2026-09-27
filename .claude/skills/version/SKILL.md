@@ -5,7 +5,7 @@ description: Cuts a new `v<major>.<minor>.<patch>` tag on the toggl-report-mcp r
 
 # Version
 
-This project's version-tag rules are defined in [`PROJECT.md`](../../../PROJECT.md) → "Names" and "Conventions → Version tags". Tags are the source of truth for versions: `git describe --tags --candidates=100 --match='v[0-9]*' --abbrev=4` derives the version of any commit. No version file exists in the repository.
+This project's version-tag rules are defined in [`PROJECT.md`](../../../PROJECT.md) → "Names" and "Conventions → Version tags". Tags are the source of truth for versions: `git describe --tags --candidates=100 --match='v[0-9]*' --abbrev=4` derives the version of any commit. The `version` in `package.json` is overwritten from the tag by the release workflow, so it need not be bumped by hand. Pushing the tag publishes to npm.
 
 ## Format
 

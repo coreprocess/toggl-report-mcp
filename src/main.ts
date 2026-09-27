@@ -17,6 +17,7 @@ import { registerWeeklyTools } from '#reports/weekly';
 import { ExportStore } from '#store/store';
 import { TogglClient } from '#toggl/client';
 import { WorkspaceResolver } from '#toggl/workspaces';
+import pkg from '../package.json' with { type: 'json' };
 
 /** Writes a diagnostic line to stderr; stdout carries the MCP protocol. */
 function log(message: string): void {
@@ -41,7 +42,7 @@ if (config.apiToken === undefined) {
 }
 
 // Wire the shared collaborators; ~1 request/second matches Toggl's rate limit.
-const server = new McpServer({ name: 'toggl-report-mcp', version: '0.1.0' });
+const server = new McpServer({ name: 'toggl-report-mcp', version: pkg.version });
 const client = new TogglClient({
   apiToken: config.apiToken,
   baseUrl: config.apiBaseUrl,

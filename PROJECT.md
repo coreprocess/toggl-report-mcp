@@ -113,7 +113,7 @@ toggl-report-mcp/
 
 ## Automation
 
-GitHub Actions CI runs typecheck, lint, test, knip and build on pushes to `main` and on pull requests. No deployment pipelines. The server is built locally with `pnpm build` and run from `dist/main.js` by an MCP client.
+GitHub Actions CI runs typecheck, lint, test, knip and build on pushes to `main` and on pull requests. Pushing a `v<major>.<minor>.<patch>` tag runs the release workflow, which sets the package version from the tag and publishes to npm via trusted publishing (skipped if that version is already on npm).
 
 ---
 

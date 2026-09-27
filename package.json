@@ -1,7 +1,6 @@
 {
   "name": "toggl-report-mcp",
   "version": "0.1.0",
-  "private": true,
   "description": "Stdio MCP server for the Toggl Reports API v3 with local file exports",
   "keywords": [
     "mcp",
@@ -39,7 +38,8 @@
     "lint": "biome check .",
     "fix": "biome check --write .",
     "test": "vitest run",
-    "knip": "knip --production"
+    "knip": "knip --production",
+    "prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip && pnpm build"
   },
   "engines": {
     "node": ">=24"
